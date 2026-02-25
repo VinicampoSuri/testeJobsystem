@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Hello World - Frontend OK</h1>
+<button onclick="testBackend()">Test Backend</button>
+<div id="result"></div>
+<script>
+async function testBackend() {
+  const res = await fetch('/api/health');
+  document.getElementById('result').innerText = await res.text();
+}
+</script>
+</body>
+</html>
