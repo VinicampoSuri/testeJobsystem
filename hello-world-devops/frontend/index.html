@@ -1,37 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Hello DevOps Multi-Tier</title>
-  <style>
-    body { font-family: Arial; padding: 50px; background: #f0f0f0; }
-    .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-    button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
-    button:hover { background: #0056b3; }
-    #result { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 5px; }
-  </style>
+    <title>Pipeline Test</title>
 </head>
 <body>
-  <div class="container">
-    <h1>🚀 Frontend OK ✅</h1>
-    <p>Servidor: <strong id="hostname"></strong></p>
-    <button onclick="testBackend()">Test Backend + Database</button>
-    <div id="result"></div>
-  </div>
-  <script>
-    document.getElementById('hostname').innerText = window.location.hostname;
-    
-    async function testBackend() {
-      const resultDiv = document.getElementById('result');
-      resultDiv.innerHTML = '<p>⏳ Testing backend...</p>';
-      
-      try {
-        const res = await fetch('/api/health');
-        const data = await res.text();
-        resultDiv.innerHTML = `<h3>Backend Response:</h3><p>${data}</p>`;
-      } catch (error) {
-        resultDiv.innerHTML = `<p style="color: red;">❌ Error: ${error.message}</p>`;
-      }
-    }
-  </script>
+    <h1>OK - Pipeline funcionando 🚀</h1>
 </body>
 </html>
