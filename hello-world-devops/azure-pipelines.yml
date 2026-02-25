@@ -1,0 +1,43 @@
+trigger:
+  - main
+
+stages:
+- stage: Deploy
+  jobs:
+  - deployment: DeployBackend
+    environment: Backend
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: |
+              docker build -t backend:latest ./backend
+              docker run -d -p 5000:5000 backend:latest
+  
+  - deployment: DeployFrontend
+    environment: Frontend
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: |
+              docker build -t frontend:latest ./frontend
+              docker run -d -p 80:80 frontend:latest
+  
+  - deployment: ConfigureDB
+    environment: Database
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: sqlcmd -S localhost -U sa -P $(DB_PASSWORD) -i database/init.sql
+  
+  - deployment: ConfigureHAProxy
+    environment: HAProxy
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: |
+              sudo cp haproxy/haproxy.cfg /etc/haproxy/
+              sudo systemctl reload haproxy
