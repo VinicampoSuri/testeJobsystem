@@ -1,57 +1,225 @@
 trigger:
-- main
+  branches:
+    include:
+      - main
+
+variables:
+  - group: deployment-secrets  # Criar no Azure DevOps
 
 stages:
-- stage: Deploy
-  displayName: Deploy Stage
-  pool:
-    name: Jobsystem-Agent   # 👈 Seu Agent Pool self-hosted
 
+# ========================================
+# STAGE 1: Deploy Database
+# ========================================
+- stage: DeployDatabase
+  displayName: '💾 Deploy Database'
   jobs:
-
-  - deployment: DeployBackend
-    displayName: Deploy Backend
-    environment: Backend
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - script: |
-              docker build -t backend:latest ./backend
-              docker run -d -p 5000:5000 backend:latest
-            displayName: Build and Run Backend
-
-  - deployment: DeployFrontend
-    displayName: Deploy Frontend
-    environment: Frontend
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - script: |
-              docker build -t frontend:latest ./frontend
-              docker run -d -p 80:80 frontend:latest
-            displayName: Build and Run Frontend
-
-  - deployment: ConfigureDB
-    displayName: Configure Database
+  - deployment: InitDatabase
+    displayName: 'Initialize SQL Server'
+    pool:
+      name: Jobsystem-Agent
     environment: Database
     strategy:
       runOnce:
         deploy:
           steps:
-          - script: |
-              sqlcmd -S localhost -U sa -P $(DB_PASSWORD) -i database/init.sql
-            displayName: Initialize Database
+          - checkout: self
+          
+          - powershell: |
+              Write-Host "🔍 Checking SQL Server connection..."
+              $result = sqlcmd -S localhost -U sa -P "$(DB_PASSWORD)" -Q "SELECT @@VERSION" -h -1
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ SQL Server is accessible"
+              } else {
+                Write-Error "❌ Cannot connect to SQL Server"
+                exit 1
+              }
+            displayName: 'Verify SQL Server Connection'
+          
+          - powershell: |
+              Write-Host "📋 Running database initialization script..."
+              $scriptPath = "$(Pipeline.Workspace)\s\database\init.sql"
+              sqlcmd -S localhost -U sa -P "$(DB_PASSWORD)" -i $scriptPath
+              
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Database initialized successfully"
+              } else {
+                Write-Error "❌ Database initialization failed"
+                exit 1
+              }
+            displayName: 'Initialize Database'
 
-  - deployment: ConfigureHAProxy
-    displayName: Configure HAProxy
+# ========================================
+# STAGE 2: Deploy Backend
+# ========================================
+- stage: DeployBackend
+  displayName: '⚙️ Deploy Backend'
+  dependsOn: DeployDatabase
+  jobs:
+  - deployment: DeployBackendApp
+    displayName: 'Deploy Backend Container'
+    pool:
+      name: Jobsystem-Agent
+    environment: Backend
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          
+          - script: |
+              echo "🐳 Building backend Docker image..."
+              cd $(Pipeline.Workspace)/s/backend
+              docker build -t backend:$(Build.BuildId) -t backend:latest .
+              
+              echo "📦 Image built successfully"
+              docker images | grep backend
+            displayName: 'Build Backend Image'
+          
+          - script: |
+              echo "🛑 Stopping old backend container..."
+              docker stop backend-app 2>/dev/null || echo "No container to stop"
+              docker rm backend-app 2>/dev/null || echo "No container to remove"
+              
+              echo "🚀 Starting new backend container..."
+              docker run -d \
+                --name backend-app \
+                --restart unless-stopped \
+                -p 5000:5000 \
+                -e DB_HOST=$(DB_HOST) \
+                -e DB_PASSWORD=$(DB_PASSWORD) \
+                backend:latest
+              
+              echo "⏳ Waiting for backend to start..."
+              sleep 5
+              
+              echo "✅ Backend deployment completed"
+              docker ps | grep backend-app
+            displayName: 'Deploy Backend Container'
+          
+          - script: |
+              echo "🧪 Testing backend health..."
+              curl -f http://localhost:5000/health || exit 1
+              echo "✅ Backend is healthy"
+            displayName: 'Health Check'
+
+# ========================================
+# STAGE 3: Deploy Frontend
+# ========================================
+- stage: DeployFrontend
+  displayName: '🌐 Deploy Frontend'
+  dependsOn: DeployBackend
+  jobs:
+  - deployment: DeployFrontendApp
+    displayName: 'Deploy Frontend Container'
+    pool:
+      name: Jobsystem-Agent
+    environment: Frontend
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          
+          - script: |
+              echo "🔧 Configuring nginx with backend IP..."
+              cd $(Pipeline.Workspace)/s/frontend
+              sed -i "s/BACKEND_IP/$(BACKEND_IP)/g" nginx.conf
+              
+              echo "📄 Nginx configuration:"
+              cat nginx.conf | grep -A 2 "upstream backend"
+            displayName: 'Configure Nginx'
+          
+          - script: |
+              echo "🐳 Building frontend Docker image..."
+              cd $(Pipeline.Workspace)/s/frontend
+              docker build -t frontend:$(Build.BuildId) -t frontend:latest .
+              
+              echo "📦 Image built successfully"
+              docker images | grep frontend
+            displayName: 'Build Frontend Image'
+          
+          - script: |
+              echo "🛑 Stopping old frontend container..."
+              docker stop frontend-app 2>/dev/null || echo "No container to stop"
+              docker rm frontend-app 2>/dev/null || echo "No container to remove"
+              
+              echo "🚀 Starting new frontend container..."
+              docker run -d \
+                --name frontend-app \
+                --restart unless-stopped \
+                -p 80:80 \
+                frontend:latest
+              
+              echo "⏳ Waiting for frontend to start..."
+              sleep 3
+              
+              echo "✅ Frontend deployment completed"
+              docker ps | grep frontend-app
+            displayName: 'Deploy Frontend Container'
+          
+          - script: |
+              echo "🧪 Testing frontend..."
+              curl -f http://localhost/ || exit 1
+              echo "✅ Frontend is accessible"
+            displayName: 'Health Check'
+
+# ========================================
+# STAGE 4: Configure HAProxy
+# ========================================
+- stage: ConfigureHAProxy
+  displayName: '⚖️ Configure HAProxy'
+  dependsOn: DeployFrontend
+  jobs:
+  - deployment: UpdateHAProxy
+    displayName: 'Update Load Balancer'
+    pool:
+      name: Jobsystem-Agent
     environment: HAProxy
     strategy:
       runOnce:
         deploy:
           steps:
+          - checkout: self
+          
           - script: |
-              sudo cp haproxy/haproxy.cfg /etc/haproxy/
+              echo "🔧 Configuring HAProxy with frontend IP..."
+              cd $(Pipeline.Workspace)/s/haproxy
+              sed -i "s/FRONTEND_IP/$(FRONTEND_IP)/g" haproxy.cfg
+              
+              echo "📄 HAProxy configuration:"
+              cat haproxy.cfg | grep -A 3 "backend web_backend"
+            displayName: 'Configure HAProxy'
+          
+          - script: |
+              echo "📋 Backing up current HAProxy config..."
+              sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.bak.$(date +%Y%m%d_%H%M%S)
+              
+              echo "📝 Installing new configuration..."
+              sudo cp $(Pipeline.Workspace)/s/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg
+              
+              echo "✅ Testing HAProxy configuration..."
+              sudo haproxy -c -f /etc/haproxy/haproxy.cfg
+              
+              if [ $? -eq 0 ]; then
+                echo "✅ Configuration is valid"
+              else
+                echo "❌ Configuration is invalid, restoring backup..."
+                sudo cp /etc/haproxy/haproxy.cfg.bak.$(date +%Y%m%d_%H%M%S) /etc/haproxy/haproxy.cfg
+                exit 1
+              fi
+            displayName: 'Install Configuration'
+          
+          - script: |
+              echo "🔄 Reloading HAProxy..."
               sudo systemctl reload haproxy
-            displayName: Reload HAProxy
+              
+              echo "✅ HAProxy reloaded successfully"
+              sudo systemctl status haproxy --no-pager -l
+            displayName: 'Reload HAProxy'
+          
+          - script: |
+              echo "🧪 Testing HAProxy..."
+              curl -f http://localhost/ || exit 1
+              echo "✅ HAProxy is working"
+            displayName: 'Health Check'
