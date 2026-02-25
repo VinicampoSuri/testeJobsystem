@@ -2,7 +2,7 @@ trigger:
 - main
  
 pool:
-  name: Jobsystem-Agent   # seu agent self-hosted
+  name: Jobsystem-Agent
  
 stages:
 - stage: BuildAndTest
