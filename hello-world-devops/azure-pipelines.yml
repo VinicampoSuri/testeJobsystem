@@ -1,10 +1,16 @@
 trigger:
-  - main
+- main
 
 stages:
 - stage: Deploy
+  displayName: Deploy Stage
+  pool:
+    name: Jobsystem-Agent   # 👈 Seu Agent Pool self-hosted
+
   jobs:
+
   - deployment: DeployBackend
+    displayName: Deploy Backend
     environment: Backend
     strategy:
       runOnce:
@@ -13,8 +19,10 @@ stages:
           - script: |
               docker build -t backend:latest ./backend
               docker run -d -p 5000:5000 backend:latest
-  
+            displayName: Build and Run Backend
+
   - deployment: DeployFrontend
+    displayName: Deploy Frontend
     environment: Frontend
     strategy:
       runOnce:
@@ -23,16 +31,21 @@ stages:
           - script: |
               docker build -t frontend:latest ./frontend
               docker run -d -p 80:80 frontend:latest
-  
+            displayName: Build and Run Frontend
+
   - deployment: ConfigureDB
+    displayName: Configure Database
     environment: Database
     strategy:
       runOnce:
         deploy:
           steps:
-          - script: sqlcmd -S localhost -U sa -P $(DB_PASSWORD) -i database/init.sql
-  
+          - script: |
+              sqlcmd -S localhost -U sa -P $(DB_PASSWORD) -i database/init.sql
+            displayName: Initialize Database
+
   - deployment: ConfigureHAProxy
+    displayName: Configure HAProxy
     environment: HAProxy
     strategy:
       runOnce:
@@ -41,3 +54,4 @@ stages:
           - script: |
               sudo cp haproxy/haproxy.cfg /etc/haproxy/
               sudo systemctl reload haproxy
+            displayName: Reload HAProxy
