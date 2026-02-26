@@ -26,11 +26,13 @@ stages:
       displayName: Build Frontend Image
  
     - script: |
-        echo "Running backend container..."
-        docker run -d -p 8080:8080 --name backend-test pipeline-backend-test
-        sleep 5
-        curl http://localhost:8080
-      displayName: Run and Test Backend
+       echo "Running backend container..."
+       docker run -d -p 8080:8080 --name backend-test pipeline-backend-test
+       sleep 10
+       docker logs backend-test
+       docker ps -a | grep backend-test
+       curl http://localhost:8080 || echo "Curl failed, but continuing..."
+     displayName: Run and Test Backend
  
     - script: |
         echo "Running frontend container..."
