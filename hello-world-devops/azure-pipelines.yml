@@ -3,8 +3,14 @@ trigger:
  
 pool:
   name: Jobsystem-Agent
+
+variables:
+- group: deployment-secrets
  
 stages:
+# ============================================
+# STAGE 1: BUILD E TESTES
+# ============================================
 - stage: BuildAndTest
   displayName: Build and Test Containers
  
@@ -16,48 +22,142 @@ stages:
     - checkout: self
  
     - script: |
-        echo "Building backend image..."
+        echo "🔨 Building backend image..."
         docker build -t pipeline-backend-test ./hello-world-devops/backend
       displayName: Build Backend Image
  
     - script: |
-        echo "Building frontend image..."
+        echo "🔨 Building frontend image..."
         docker build -t pipeline-frontend-test ./hello-world-devops/frontend
       displayName: Build Frontend Image
  
     - script: |
-        echo "Creating network..."
+        echo "🌐 Creating Docker network..."
         docker network create test-network || true
-    
-        echo "Starting backend..."
-        docker run -d --network test-network --name backend pipeline-backend-test
-    
-        echo "Starting frontend..."
-        docker run -d --network test-network -p 3000:80 --name frontend pipeline-frontend-test
-    
-        echo "Waiting for services..."
-        sleep 10
-    
-        echo "Testing backend health (from host)..."
-        curl -f http://localhost:5000/health || echo "Backend not exposed, testing via frontend..."
-    
-        echo "Testing frontend..."
+        
+        echo "🚀 Starting backend container..."
+        docker run -d \
+          --network test-network \
+          --name backend \
+          -e DB_HOST=$(DB_HOST) \
+          -e DB_USER=sa \
+          -e DB_PASSWORD=$(DB_PASSWORD) \
+          -e DB_NAME=master \
+          -e ENVIRONMENT=test \
+          pipeline-backend-test
+        
+        echo "🚀 Starting frontend container..."
+        docker run -d \
+          --network test-network \
+          --name frontend \
+          -p 3000:80 \
+          pipeline-frontend-test
+        
+        echo "⏳ Waiting for services to start..."
+        sleep 15
+        
+        echo "✅ Testing frontend..."
         curl -f http://localhost:3000 || exit 1
-    
-        echo "Testing API proxy through frontend..."
+        
+        echo "✅ Testing backend health via proxy..."
         curl -f http://localhost:3000/api/health || exit 1
-    
-        echo "✅ All tests passed!"
+        
+        echo "✅ Testing backend hello endpoint..."
+        curl -f http://localhost:3000/api/hello || exit 1
+        
+        echo "🎉 All tests passed!"
       displayName: Run Integration Tests
  
     - script: |
+        echo "📋 Backend logs:"
         docker logs backend
+        echo ""
+        echo "📋 Frontend logs:"
         docker logs frontend
-      displayName: Show Logs
+      displayName: Show Container Logs
       condition: always()
  
     - script: |
         docker rm -f backend frontend || true
         docker network rm test-network || true
-      displayName: Cleanup
+      displayName: Cleanup Test Containers
       condition: always()
+
+# ============================================
+# STAGE 2: DEPLOY EM PRODUÇÃO
+# ============================================
+- stage: Deploy
+  displayName: Deploy to Production
+  dependsOn: BuildAndTest
+  condition: succeeded()
+  
+  jobs:
+  - job: DeployProduction
+    displayName: Deploy Production Containers
+    steps:
+    
+    - checkout: none  # Não precisa do código, as imagens já foram buildadas
+    
+    - script: |
+        echo "🧹 Removing old production containers..."
+        docker rm -f backend-prod || true
+        docker rm -f frontend-prod || true
+        
+        echo "🌐 Creating production network..."
+        docker network create prod-network || true
+      displayName: Prepare Production Environment
+    
+    - script: |
+        echo "🚀 Deploying backend to production..."
+        docker run -d \
+          --name backend-prod \
+          --network prod-network \
+          --restart unless-stopped \
+          -e DB_HOST=$(DB_HOST) \
+          -e DB_USER=sa \
+          -e DB_PASSWORD=$(DB_PASSWORD) \
+          -e DB_NAME=$(DB_NAME) \
+          -e ENVIRONMENT=production \
+          pipeline-backend-test
+        
+        echo "⏳ Waiting for backend to start..."
+        sleep 10
+        
+        echo "✅ Backend deployed successfully!"
+      displayName: Deploy Backend
+    
+    - script: |
+        echo "🚀 Deploying frontend to production..."
+        docker run -d \
+          --name frontend-prod \
+          --network prod-network \
+          --restart unless-stopped \
+          -p 80:80 \
+          pipeline-frontend-test
+        
+        echo "⏳ Waiting for frontend to start..."
+        sleep 5
+        
+        echo "✅ Frontend deployed successfully!"
+      displayName: Deploy Frontend
+    
+    - script: |
+        echo "🔍 Verifying deployment..."
+        
+        echo "Checking frontend..."
+        curl -f http://localhost || exit 1
+        
+        echo "Checking backend via proxy..."
+        curl -f http://localhost/api/health || exit 1
+        
+        echo "✅ Production deployment verified!"
+      displayName: Verify Production Deployment
+    
+    - script: |
+        echo "📊 Production Status:"
+        echo "===================="
+        docker ps | grep -E "backend-prod|frontend-prod"
+        echo ""
+        echo "🌐 Access URL: http://$(hostname -I | awk '{print $‌1}')"
+        echo "✅ Deployment complete!"
+      displayName: Show Production Status
