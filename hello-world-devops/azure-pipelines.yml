@@ -82,7 +82,7 @@ stages:
           --restart unless-stopped \
           -p 5000:5000 \
           -e DB_HOST=$(DB_HOST) \
-          -e DB_USER=sa \
+          -e DB_USER=$(DB_USER) \
           -e DB_PASSWORD=$(DB_PASSWORD) \
           -e DB_NAME=$(DB_NAME) \
           -e ENVIRONMENT=production \
