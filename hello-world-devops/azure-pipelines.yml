@@ -12,6 +12,8 @@ stages:
   - job: DockerTest
     displayName: Docker Build + Run
     steps:
+    
+    - checkout: self
  
     - script: |
         echo "Building image..."
