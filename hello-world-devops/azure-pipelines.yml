@@ -16,6 +16,12 @@ stages:
     - checkout: self
  
     - script: |
+        pwd
+        ls -la
+        find . -name Dockerfile
+      displayName: Debug - List Files
+
+    - script: |
         echo "Building image..."
         docker build -t pipeline-http-test .
  
