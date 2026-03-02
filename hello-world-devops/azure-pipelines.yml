@@ -3,14 +3,18 @@ trigger:
 
 variables:
 - group: deployment-secrets
- 
+- name: ACR_NAME
+  value: 'jobsystem.azurecr.io'
+- name: IMAGE_TAG
+  value: '$(Build.BuildId)'
+
 stages:
 # ============================================
-# STAGE 1: BUILD E TESTES
+# STAGE 1: BUILD E PUSH PARA O ACR
 # ============================================
 - stage: BuildAndTest
-  displayName: Build and Test
-  
+  displayName: Build and Push to ACR
+
   jobs:
   # ===== BUILD BACKEND =====
   - job: BuildBackend
@@ -20,18 +24,24 @@ stages:
       demands:
       - Agent.Name -equals Backend
     steps:
-    
+
     - checkout: self
- 
+
+    - task: Docker@2
+      displayName: Build & Push Backend to ACR
+      inputs:
+        command: buildAndPush
+        containerRegistry: 'acr-jobsystem'
+        repository: 'pipeline-backend-prod'
+        dockerfile: './hello-world-devops/backend/Dockerfile'
+        tags: |
+          $(IMAGE_TAG)
+          latest
+
     - script: |
-        echo "🔨 Building backend image..."
-        docker build -t pipeline-backend-prod ./hello-world-devops/backend
-      displayName: Build Backend Image
- 
-    - script: |
-        echo "✅ Backend image built successfully!"
-        docker images | grep pipeline-backend-prod
-      displayName: Verify Backend Image
+        echo "✅ Backend pushed to ACR!"
+        echo "📦 Image: $(ACR_NAME)/pipeline-backend-prod:$(IMAGE_TAG)"
+      displayName: Verify Backend Push
 
   # ===== BUILD FRONTEND =====
   - job: BuildFrontend
@@ -41,18 +51,24 @@ stages:
       demands:
       - Agent.Name -equals Frontend
     steps:
-    
+
     - checkout: self
- 
+
+    - task: Docker@2
+      displayName: Build & Push Frontend to ACR
+      inputs:
+        command: buildAndPush
+        containerRegistry: 'acr-jobsystem'
+        repository: 'pipeline-frontend-prod'
+        dockerfile: './hello-world-devops/frontend/Dockerfile'
+        tags: |
+          $(IMAGE_TAG)
+          latest
+
     - script: |
-        echo "🔨 Building frontend image..."
-        docker build -t pipeline-frontend-prod ./hello-world-devops/frontend
-      displayName: Build Frontend Image
- 
-    - script: |
-        echo "✅ Frontend image built successfully!"
-        docker images | grep pipeline-frontend-prod
-      displayName: Verify Frontend Image
+        echo "✅ Frontend pushed to ACR!"
+        echo "📦 Image: $(ACR_NAME)/pipeline-frontend-prod:$(IMAGE_TAG)"
+      displayName: Verify Frontend Push
 
 # ============================================
 # STAGE 2: DEPLOY EM PRODUÇÃO
@@ -61,7 +77,7 @@ stages:
   displayName: Deploy to Production
   dependsOn: BuildAndTest
   condition: succeeded()
-  
+
   jobs:
   # ===== DEPLOY BACKEND =====
   - job: DeployBackend
@@ -71,11 +87,20 @@ stages:
       demands:
       - Agent.Name -equals Backend
     steps:
-    
+
+    - task: Docker@2
+      displayName: ACR Login
+      inputs:
+        command: login
+        containerRegistry: 'acr-jobsystem'
+
     - script: |
         echo "🧹 Stopping old backend container..."
         docker rm -f backend-prod || true
-        
+
+        echo "🚀 Pulling image from ACR..."
+        docker pull $(ACR_NAME)/pipeline-backend-prod:$(IMAGE_TAG)
+
         echo "🚀 Starting backend in production..."
         docker run -d \
           --name backend-prod \
@@ -86,17 +111,17 @@ stages:
           -e DB_PASSWORD=$(DB_PASSWORD) \
           -e DB_NAME=$(DB_NAME) \
           -e ENVIRONMENT=production \
-          pipeline-backend-prod
-        
+          $(ACR_NAME)/pipeline-backend-prod:$(IMAGE_TAG)
+
         echo "⏳ Waiting for backend to start..."
         sleep 15
-        
+
         echo "✅ Testing backend health..."
         curl -f http://localhost:5000/health || exit 1
-        
+
         echo "🎉 Backend deployed successfully!"
       displayName: Deploy Backend Container
-    
+
     - script: |
         echo "📊 Backend Status:"
         docker ps | grep backend-prod
@@ -116,44 +141,51 @@ stages:
       demands:
       - Agent.Name -equals Frontend
     steps:
-    
+
     - checkout: self
-    
+
+    - task: Docker@2
+      displayName: ACR Login
+      inputs:
+        command: login
+        containerRegistry: 'acr-jobsystem'
+
     - script: |
         echo "⚙️ Configuring backend IP..."
         BACKEND_IP="$(BACKEND_IP)"
-        echo "Backend IP: $BACKEND_IP"
-        
-        # Atualiza o nginx.conf com o IP real do backend
         sed -i "s/server backend:5000;/server $BACKEND_IP:5000;/g" ./hello-world-devops/frontend/nginx.conf
-        
+
         echo "🔨 Rebuilding frontend with backend IP..."
-        docker build -t pipeline-frontend-prod ./hello-world-devops/frontend
-      displayName: Configure Backend IP and Rebuild
-    
+        docker build -t $(ACR_NAME)/pipeline-frontend-prod:$(IMAGE_TAG) \
+          ./hello-world-devops/frontend
+
+        echo "📤 Pushing rebuilt frontend to ACR..."
+        docker push $(ACR_NAME)/pipeline-frontend-prod:$(IMAGE_TAG)
+      displayName: Configure, Rebuild and Push Frontend
+
     - script: |
         echo "🧹 Stopping old frontend container..."
         docker rm -f frontend-prod || true
-        
+
+        echo "🚀 Pulling image from ACR..."
+        docker pull $(ACR_NAME)/pipeline-frontend-prod:$(IMAGE_TAG)
+
         echo "🚀 Starting frontend in production..."
         docker run -d \
           --name frontend-prod \
           --restart unless-stopped \
           -p 80:80 \
-          pipeline-frontend-prod
-        
+          $(ACR_NAME)/pipeline-frontend-prod:$(IMAGE_TAG)
+
         echo "⏳ Waiting for frontend to start..."
         sleep 10
-        
-        echo "✅ Testing frontend..."
+
         curl -f http://localhost || exit 1
-        
-        echo "✅ Testing backend via proxy..."
         curl -f http://localhost/api/health || exit 1
-        
+
         echo "🎉 Frontend deployed successfully!"
       displayName: Deploy Frontend Container
-    
+
     - script: |
         echo "📊 Frontend Status:"
         docker ps | grep frontend-prod
@@ -172,7 +204,7 @@ stages:
   displayName: Verify Production Deployment
   dependsOn: Deploy
   condition: succeeded()
-  
+
   jobs:
   - job: VerifyFromFrontend
     displayName: End-to-End Test
@@ -181,25 +213,25 @@ stages:
       demands:
       - Agent.Name -equals Frontend
     steps:
-    
+
     - script: |
         echo "🔍 Running end-to-end tests..."
-        
+
         echo "✅ Test 1: Frontend page"
         curl -f http://localhost || exit 1
-        
+
         echo "✅ Test 2: Backend health via proxy"
         curl -f http://localhost/api/health || exit 1
-        
+
         echo "✅ Test 3: Backend hello endpoint"
         curl -f http://localhost/api/hello || exit 1
-        
+
         echo "✅ Test 4: Database connection"
         curl -f http://localhost/api/db-test || echo "⚠️ Database test failed (non-blocking)"
-        
+
         echo "🎉 All critical tests passed!"
       displayName: Run End-to-End Tests
-    
+
     - script: |
         echo "============================================"
         echo "🎉 DEPLOYMENT COMPLETE!"
