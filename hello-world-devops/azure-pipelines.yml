@@ -10,7 +10,7 @@ variables:
 
 stages:
 # ============================================
-# STAGE 1: BUILD E PUSH PARA O ACR
+# STAGE 1: BUILD E PUSH PARA O ACR - Teste CI
 # ============================================
 - stage: BuildAndTest
   displayName: Build and Push to ACR
